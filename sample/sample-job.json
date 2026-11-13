@@ -1,0 +1,20 @@
+{
+  "report_columns": [
+    {"name": "report_id", "type": "INTEGER"},
+    {"name": "report_no", "type": "TEXT"},
+    {"name": "dept", "type": "TEXT"}
+  ],
+  "report_pk": ["report_id"],
+  "item_columns": [
+    {"name": "item_id", "type": "INTEGER"},
+    {"name": "report_id", "type": "INTEGER"},
+    {"name": "item_name", "type": "TEXT"},
+    {"name": "meas_value", "type": "INTEGER"}
+  ],
+  "item_pk": ["item_id"],
+  "fk_column": "report_id",
+  "fk_ref_column": "report_id",
+  "sql1": "SELECT r.report_id, count(i.item_id) AS item_cnt FROM report r JOIN item i ON i.report_id = r.report_id GROUP BY r.report_id ORDER BY r.report_id",
+  "sql2": "SELECT r.report_id, count(i.item_id) AS item_cnt FROM report r LEFT JOIN item i ON i.report_id = r.report_id GROUP BY r.report_id ORDER BY r.report_id",
+  "timeout_seconds": 30
+}

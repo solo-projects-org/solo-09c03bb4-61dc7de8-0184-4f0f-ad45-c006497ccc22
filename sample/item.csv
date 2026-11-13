@@ -1,0 +1,4 @@
+item_id,report_id,item_name,meas_value
+101,1,白细胞,12
+102,1,血红蛋白,130
+103,2,白细胞,8

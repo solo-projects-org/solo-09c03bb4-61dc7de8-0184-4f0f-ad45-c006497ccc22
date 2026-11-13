@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SQL 差异最小复现平台</title>
+<style>
+  :root { --bd:#d0d7de; --bg:#f6f8fa; --blue:#0969da; --red:#cf222e; --green:#1a7f37; --amber:#9a6700; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.6 -apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif; color:#1f2328; }
+  header { background:#24292f; color:#fff; padding:14px 24px; }
+  header h1 { margin:0; font-size:18px; }
+  header p { margin:4px 0 0; color:#c9d1d9; font-size:12px; }
+  main { max-width:1180px; margin:0 auto; padding:20px; display:grid; grid-template-columns:1fr 1fr; gap:18px; }
+  .card { border:1px solid var(--bd); border-radius:8px; background:#fff; padding:16px; }
+  .card h2 { margin:0 0 12px; font-size:15px; border-bottom:1px solid var(--bd); padding-bottom:8px; }
+  .full { grid-column:1 / -1; }
+  label { display:block; font-weight:600; margin:10px 0 4px; font-size:13px; }
+  input[type=file], input[type=text], input[type=number], select, textarea {
+    width:100%; padding:7px 9px; border:1px solid var(--bd); border-radius:6px; font:inherit; background:#fff; }
+  textarea { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12.5px; min-height:120px; resize:vertical; }
+  table { border-collapse:collapse; width:100%; font-size:12.5px; }
+  th,td { border:1px solid var(--bd); padding:4px 7px; text-align:left; }
+  th { background:var(--bg); }
+  button { background:var(--blue); color:#fff; border:0; border-radius:6px; padding:8px 16px; font:inherit; cursor:pointer; margin-top:12px; }
+  button.secondary { background:#57606a; }
+  button:disabled { background:#9db7d6; cursor:not-allowed; }
+  .hint { color:#57606a; font-size:12px; margin-top:3px; }
+  .badge { display:inline-block; padding:2px 9px; border-radius:999px; font-size:12px; font-weight:600; }
+  .b-RUNNING,.b-QUEUED { background:#ddf4ff; color:var(--blue); }
+  .b-COMPLETE { background:#dafbe1; color:var(--green); }
+  .b-INCOMPLETE,.b-INTERRUPTED { background:#fff8c5; color:var(--amber); }
+  .b-CANCELLED,.b-ERROR,.b-REJECTED { background:#ffebe9; color:var(--red); }
+  #log { background:#0d1117; color:#c9d1d9; border-radius:6px; padding:10px; height:260px; overflow:auto;
+         font-family:ui-monospace,Menlo,monospace; font-size:12px; white-space:pre-wrap; }
+  .lv-info { color:#79c0ff; } .lv-warn { color:#d29922; } .lv-error { color:#ff7b72; }
+  .kv { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin:8px 0; }
+  .kv div { background:var(--bg); border-radius:6px; padding:8px; text-align:center; }
+  .kv b { display:block; font-size:17px; }
+  .msg { padding:9px 12px; border-radius:6px; margin:8px 0; font-size:13px; }
+  .msg.err { background:#ffebe9; border:1px solid #ffabaf; }
+  .msg.ok { background:#dafbe1; border:1px solid #a6e9b5; }
+  .pk-chk { width:auto; margin-right:5px; }
+  .row-flex { display:flex; gap:10px; align-items:center; }
+  a.dl { color:var(--blue); }
+</style>
+</head>
+<body>
+<header>
+  <h1>SQL 差异最小复现平台（FastAPI + DuckDB）</h1>
+  <p>上传报告 / 检验项两份 CSV，声明列类型、主键与报告号外键，填写两条仅查询这两表的确定性 SELECT；
+     系统按无序多重集比较（重复行照计），自动删行缩减并产出可交付维护者的最小包。空字段一律作 NULL。</p>
+</header>
+<main>
+  <section class="card">
+    <h2>1. 上传数据与列定义</h2>
+    <label>报告表 report.csv</label>
+    <input type="file" id="reportFile" accept=".csv">
+    <label>检验项表 item.csv</label>
+    <input type="file" id="itemFile" accept=".csv">
+
+    <label>报告表列定义（名 / 类型 / 主键）</label>
+    <table id="reportCols"><thead><tr><th>列名</th><th>类型</th><th>主键</th></tr></thead><tbody></tbody></table>
+    <label>检验项表列定义（名 / 类型 / 主键）</label>
+    <table id="itemCols"><thead><tr><th>列名</th><th>类型</th><th>主键</th></tr></thead><tbody></tbody></table>
+    <div class="hint">类型仅支持 INTEGER / TEXT；主键可多选（联合主键）。CSV 中未声明的列不会导入。</div>
+
+    <label>报告号外键：item.</label>
+    <div class="row-flex">
+      <select id="fkColumn"></select>
+      <span>→ report.</span>
+      <select id="fkRefColumn"></select>
+    </div>
+    <div class="hint">删除报告时，外键值等于该报告引用列的检验项将联删；孤儿行允许存在。</div>
+  </section>
+
+  <section class="card">
+    <h2>2. 两条确定性 SELECT</h2>
+    <label>查询一（如：改写前 SQL）</label>
+    <textarea id="sql1" placeholder="SELECT ... FROM report JOIN item ON ..."></textarea>
+    <label>查询二（如：改写后 SQL）</label>
+    <textarea id="sql2" placeholder="SELECT ... FROM report LEFT JOIN item ON ..."></textarea>
+    <label>单次候选验证超时（秒，1–3600）</label>
+    <input type="number" id="timeout" value="30" min="1" max="3600" step="1">
+    <div class="hint">超时不判为无差异，只记为未完成；超时/取消会终止整个工作进程组。</div>
+    <div class="row-flex">
+      <button id="submitBtn">创建并开始缩减</button>
+      <button class="secondary" id="sampleBtn" type="button">载入本地差异样例</button>
+    </div>
+    <div id="formMsg"></div>
+  </section>
+
+  <section class="card full">
+    <h2>3. 作业与缩减进度（同一时刻只运行一批）</h2>
+    <div id="jobPicker" class="row-flex">
+      <select id="jobSelect" style="max-width:360px"></select>
+      <button class="secondary" id="refreshBtn" type="button" style="margin-top:0">刷新</button>
+      <button class="secondary" id="startBtn" type="button" style="margin-top:0">重新启动</button>
+      <button class="secondary" id="cancelBtn" type="button" style="margin-top:0;background:var(--red)">取消</button>
+      <button class="secondary" id="dlBtn" type="button" style="margin-top:0">下载最近验证包</button>
+    </div>
+    <div id="status"></div>
+    <label style="margin-top:12px">事件日志</label>
+    <div id="log"></div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let currentJob = null, pollTimer = null;
+
+function parseCsvHeader(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => {
+      const text = String(r.result).replace(/^﻿/, "");
+      const first = text.split(/\r?\n/, 1)[0];
+      // 简单 CSV 表头解析（样例表头无引号）
+      const cols = first.split(",").map(s => s.trim()).filter(Boolean);
+      resolve(cols);
+    };
+    r.onerror = reject;
+    r.readAsText(file);
+  });
+}
+
+function colTable(tbodyId, cols, defaultPk) {
+  const tb = $(tbodyId);
+  tb.innerHTML = "";
+  cols.forEach((c, i) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${c}</td>
+      <td><select><option>INTEGER</option><option>TEXT</option></select></td>
+      <td><input class="pk-chk" type="checkbox" ${defaultPk(i,c)}></td>`;
+    tb.appendChild(tr);
+  });
+}
+
+async function bindCsv(inputId, tbodyId, fkOption) {
+  const file = $(inputId).files[0];
+  if (!file) return;
+  const cols = await parseCsvHeader(file);
+  colTable(tbodyId, cols, (i) => i === 0);
+  if (fkOption === "item") {
+    $("fkColumn").innerHTML = cols.map(c => `<option>${c}</option>`).join("");
+  } else {
+    $("fkRefColumn").innerHTML = cols.map(c => `<option>${c}</option>`).join("");
+  }
+}
+$("reportFile").addEventListener("change", () => bindCsv("reportFile", "reportCols", "report"));
+$("itemFile").addEventListener("change", () => bindCsv("itemCols", "itemCols", "item"));
+
+function readColTable(tbodyId) {
+  return [...$(tbodyId).querySelectorAll("tr")].map(tr => {
+    const tds = tr.children;
+    return { name: tds[0].textContent, type: tds[1].querySelector("select").value,
+             pk: tds[2].querySelector("input").checked };
+  });
+}
+
+function showMsg(el, text, ok) {
+  el.innerHTML = `<div class="msg ${ok ? "ok" : "err"}">${text}</div>`;
+}
+
+$("submitBtn").addEventListener("click", async () => {
+  const msg = $("formMsg");
+  if (!$("reportFile").files[0] || !$("itemFile").files[0])
+    return showMsg(msg, "请先选择两份 CSV", false);
+  const rCols = readColTable("reportCols"), iCols = readColTable("itemCols");
+  const fd = new FormData();
+  fd.append("report_csv", $("reportFile").files[0]);
+  fd.append("item_csv", $("itemFile").files[0]);
+  fd.append("report_columns", JSON.stringify(rCols.map(({name,type}) => ({name,type}))));
+  fd.append("item_columns", JSON.stringify(iCols.map(({name,type}) => ({name,type}))));
+  fd.append("report_pk", JSON.stringify(rCols.filter(c => c.pk).map(c => c.name)));
+  fd.append("item_pk", JSON.stringify(iCols.filter(c => c.pk).map(c => c.name)));
+  fd.append("fk_column", $("fkColumn").value);
+  fd.append("fk_ref_column", $("fkRefColumn").value);
+  fd.append("sql1", $("sql1").value);
+  fd.append("sql2", $("sql2").value);
+  fd.append("timeout_seconds", $("timeout").value);
+  fd.append("autostart", "true");
+  $("submitBtn").disabled = true;
+  try {
+    const resp = await fetch("/api/jobs", { method: "POST", body: fd });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || resp.status);
+    showMsg(msg, `作业已创建：${data.job_id}`, true);
+    await refreshJobList();
+    selectJob(data.job_id);
+  } catch (e) {
+    showMsg(msg, "创建失败：" + e.message, false);
+  } finally {
+    $("submitBtn").disabled = false;
+  }
+});
+
+$("sampleBtn").addEventListener("click", async () => {
+  const msg = $("formMsg");
+  try {
+    const resp = await fetch("/api/sample", { method: "POST" });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || resp.status);
+    showMsg(msg, `样例作业已创建并开始：${data.job_id}`, true);
+    await refreshJobList();
+    selectJob(data.job_id);
+  } catch (e) {
+    showMsg(msg, "样例载入失败：" + e.message, false);
+  }
+});
+
+async function refreshJobList() {
+  const resp = await fetch("/api/jobs");
+  const list = await resp.json();
+  const sel = $("jobSelect");
+  sel.innerHTML = list.map(j =>
+    `<option value="${j.job_id}">${j.job_id} — ${j.status}</option>`).join("");
+  return list;
+}
+$("refreshBtn").addEventListener("click", refreshJobList);
+$("jobSelect").addEventListener("change", () => selectJob($("jobSelect").value));
+
+function selectJob(id) {
+  currentJob = id;
+  $("jobSelect").value = id;
+  poll();
+  if (!pollTimer) pollTimer = setInterval(poll, 1500);
+}
+
+async function poll() {
+  if (!currentJob) return;
+  const [s, e] = await Promise.all([
+    fetch(`/api/jobs/${currentJob}`).then(r => r.json()),
+    fetch(`/api/jobs/${currentJob}/events`).then(r => r.json()),
+  ]);
+  const terminal = ["COMPLETE","INCOMPLETE","CANCELLED","ERROR","REJECTED","INTERRUPTED"].includes(s.status);
+  $("status").innerHTML = `
+    <div style="margin-top:10px">状态：<span class="badge b-${s.status}">${s.status}</span>
+      <span class="hint" style="display:inline;margin-left:10px">轮次 ${s.pass_index ?? 0} · 创建于 ${s.created_at}</span></div>
+    <div class="kv">
+      <div><b>${s.attempts}</b>验证次数</div>
+      <div><b>${s.accepted}</b>采用候选</div>
+      <div><b>${s.rejected}</b>拒绝</div>
+      <div><b>${s.timeouts}</b>超时</div>
+    </div>
+    <div class="hint">当前数据：报告 ${s.current_report_rows}/${s.report_rows} 行，检验项 ${s.current_item_rows}/${s.item_rows} 行；
+      工作进程异常 ${s.errors} 次。最近验证：${s.last_attempt ?? "—"}</div>
+    ${s.fatal_error ? `<div class="msg err">${s.fatal_error}</div>` : ""}
+    ${s.note ? `<div class="msg ok">${s.note}</div>` : ""}
+    ${(s.warnings||[]).map(w => `<div class="msg" style="background:#fff8c5;border:1px solid #eac54f">${w}</div>`).join("")}
+    ${s.last_result ? `<div class="hint">最近结果：Q1 ${s.last_result.q1.row_count} 行 / Q2 ${s.last_result.q2.row_count} 行，
+       ${s.last_result.same ? "相同" : "不同（差异保留）"}</div>` : ""}`;
+  $("log").innerHTML = (e.events || []).map(ev =>
+    `<span class="lv-${ev.level}">[${ev.ts.slice(11,19)}] ${ev.level.toUpperCase()} ${ev.message}</span>`).join("\n");
+  $("log").scrollTop = $("log").scrollHeight;
+  $("cancelBtn").disabled = terminal;
+  $("startBtn").disabled = !["INCOMPLETE","ERROR","INTERRUPTED","QUEUED"].includes(s.status);
+  $("dlBtn").disabled = !s.download_available;
+  if (terminal) { clearInterval(pollTimer); pollTimer = null; refreshJobList(); }
+}
+
+$("cancelBtn").addEventListener("click", async () => {
+  if (!confirm("确认取消？取消后实际计算立即停止，且不再更换最近验证包。")) return;
+  await fetch(`/api/jobs/${currentJob}/cancel`, { method: "POST" });
+  poll();
+});
+$("startBtn").addEventListener("click", async () => {
+  const r = await fetch(`/api/jobs/${currentJob}/start`, { method: "POST" });
+  if (!r.ok) { const d = await r.json(); alert(d.detail); return; }
+  if (!pollTimer) pollTimer = setInterval(poll, 1500);
+});
+$("dlBtn").addEventListener("click", () => {
+  if (currentJob) window.open(`/api/jobs/${currentJob}/package`, "_blank");
+});
+
+(async function init() {
+  await refreshJobList();
+  const sel = $("jobSelect");
+  if (sel.options.length) selectJob(sel.options[0].value);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,21 @@
+services:
+  sql-repro:
+    build: .
+    image: sql-diff-repro:1.0.0
+    container_name: sql-diff-repro
+    ports:
+      - "8000:8000"
+    volumes:
+      # 作业数据/最近验证包落盘，容器取消或重启后仍保留
+      - repro-data:/data
+    environment:
+      REPRO_DATA_DIR: /data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3).status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+volumes:
+  repro-data:
